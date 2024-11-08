@@ -279,6 +279,11 @@ List<BaseLayerData>? TranslateStackupData(JLCStackupTemplate template)
 					copperLayerNumber++;
 
 					var thicknessStr = coreEntry.Thickness;
+					if (thicknessStr == "" && template.TemplateName == "JLC061611-1080B")
+					{
+						Console.WriteLine($"Fixup: JLC061611-1080B has blank copper thickness, replacing with 0.03mm");
+						thicknessStr = "0.03mm";
+					}
 					var thickness = ParseThickness(thicknessStr) ?? throw new InvalidDataException($"Could not parse thickness value \"{thicknessStr}\".");
 
 					var weight = template.InnerCopperWeight; // are cores *always* internal?
