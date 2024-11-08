@@ -2,7 +2,7 @@
 
 This repository contains auto-generated Altium XML stackup files for JLCPCB's multi-layer PCBs, plus the LinqPad (C#) script that was used to generate them. It also contains the raw API JSON responses from JLC's website, and a normalised JSON format that you can use to generate your own stackups for other EDA tools without needing to touch my code.
 
-Stackups are generated for all supported board thicknesses, outer copper weights, inner copper weights, and stackup variations, for layer counts from 4 to 32. As of 2024-11-08, this produces 313 separate stackup files.
+Stackups are generated for all supported board thicknesses, outer copper weights, inner copper weights, and stackup variations, for layer counts from 4 to 32. As of 2024-11-08 this produces 313 separate stackup files.
 
 ## Warning
 
@@ -39,7 +39,7 @@ Copper layers include the following specifications:
 - Weight of the copper in oz
 - Thickness of the copper
 - Via plating thickness of 0.018mm
-- Copper resistivity of 17.24nΩ/m (Altium default)
+- Copper resistivity of 17.24nΩ∙m (Altium default; is based on resistivity of annealed copper)
 - A Modified Hammerstad roughness profile (SR=1μm, RF=2)
 
 #### Copper weight and thickness
@@ -130,3 +130,4 @@ The LinqPad script is released under MIT license. The license text can be found 
 The normalised JSON files in the `normalised_json` directory are released into the public domain with no rights reserved.
 
 The raw JSON files in the `raw_json` directory are the property of JLCPCB and are included here for reference only.
+
