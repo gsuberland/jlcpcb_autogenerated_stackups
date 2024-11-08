@@ -1,8 +1,8 @@
-# JLCPCB Multi-Layer Stackup Files for Altium
+# JLCPCB Multi-Layer Stackup Files for Altium & KiCAD
 
-This repository contains auto-generated Altium XML stackup files for JLCPCB's multi-layer PCBs, plus the LinqPad (C#) script that was used to generate them. It also contains the raw API JSON responses from JLC's website, and a normalised JSON format that you can use to generate your own stackups for other EDA tools without needing to touch my code.
+This repository contains auto-generated stackup files for JLCPCB's multi-layer PCBs, plus the LinqPad (C#) script that was used to generate them. It also contains the raw API JSON responses from JLC's website, and a normalised JSON format that you can use to generate your own stackups for other EDA tools without needing to touch my code.
 
-Stackups are generated for all supported board thicknesses, outer copper weights, inner copper weights, and stackup variations, for layer counts from 4 to 32. As of 2024-11-08 this produces 313 separate stackup files.
+Stackups are generated for all supported board thicknesses, outer copper weights, inner copper weights, and stackup variations, for layer counts from 4 to 32. As of 2024-11-09 this produces 313 separate stackup files.
 
 ## Warning
 
@@ -11,6 +11,8 @@ Stackups are generated for all supported board thicknesses, outer copper weights
 ## Organisation
 
 The Altium stackup files are in the `altium_stackups` directory. These are XML stackups (*.stackupx files) which can be loaded from the File -> Load Stackup From File menu in Altium's Layer Stack Manager.
+
+The KiCAD stackup files are in the `kicad_stackups` directory. These are empty PCBs (.kicad_pcb files) which can be loaded by going to File -> Board Setup -> Import settings from another board, selecting the PCB file, checking "Board layers and physical stackup", then clicking Import Settings.
 
 The raw JSON data returned by JLCPCB's impedance template API is stored in the `raw_json` directory.
 
@@ -24,7 +26,7 @@ jlcpcb_[layerCount]L_[boardThickness]mm_outer[outerWeight]oz_inner[innerWeight]o
 
 where `layerCount` is the number of copper layers, `boardThickness` is the nominal PCB thickness that you would enter in the order page, `outerWeight` is the outer layer copper weight (e.g. 0.5, 1.0, 2.0) in ounces, `innerWeight` is the inner layer copper weight in ounces, and `templateName` is the JLCPCB stackup template name (e.g. `JLC04161H-7628` for the default 4L stackup). Default stackups, referred to as "No requirement" by JLC's order page, have a template name of `NOREQ`.
 
-For example, a 4L board with 1.6mm thickness, 1oz outer copper, 0.5oz inner copper, and the JLC0416H-7628 stackup would be called:
+For example, an Altium stackup for a 4L board with 1.6mm thickness, 1oz outer copper, 0.5oz inner copper, and the JLC0416H-7628 stackup would be called:
 
 ```
 jlcpcb_4L_1.6mm_outer1oz_inner0.5oz_JLC04161H-7628.stackupx
@@ -36,11 +38,11 @@ jlcpcb_4L_1.6mm_outer1oz_inner0.5oz_JLC04161H-7628.stackupx
 
 Copper layers include the following specifications:
 
-- Weight of the copper in oz
+- Weight of the copper in oz (Altium only)
 - Thickness of the copper
-- Via plating thickness of 0.018mm
-- Copper resistivity of 17.24nΩ∙m (Altium default; is based on resistivity of annealed copper)
-- A Modified Hammerstad roughness profile (SR=1μm, RF=2)
+- Via plating thickness of 0.018mm (Altium only)
+- Copper resistivity of 17.24nΩ∙m (Altium only; is based on resistivity of annealed copper)
+- A Modified Hammerstad roughness profile set to SR=1μm, RF=2 (Altium only)
 
 #### Copper weight and thickness
 
@@ -58,11 +60,11 @@ Dielectric layers include the following specifications:
 - Material manufacturer and product name
 - Construction (e.g. 7628)
 - Thickness
-- Resin content (%)
+- Resin content (Altium only)
 - Dielectric constant
 - Loss tangent
-- Glass transition temperature
-- Rated frequency (always 1GHz)
+- Glass transition temperature (Altium only)
+- Rated frequency (Altium only)
 
 #### Material type
 
@@ -126,6 +128,8 @@ Additional material specifications were sourced from the following locations:
 ## License
 
 The LinqPad script is released under MIT license. The license text can be found within the script file.
+
+The stackup files in the `altium_stackups` and `kicad_stackups` directories are released into the public domain with no rights reserved.
 
 The normalised JSON files in the `normalised_json` directory are released into the public domain with no rights reserved.
 

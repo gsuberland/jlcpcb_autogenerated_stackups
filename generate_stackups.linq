@@ -9,8 +9,9 @@
 
 /*
 
-JLCPCB Stackup Generator for Altium
-Generates .stackupx files for Altium using JLC's impedance template API.
+JLCPCB Stackup Generator for Altium & KiCAD
+Generates stackup templates using JLC's impedance template API.
+Outputs normalised JSON, Altium XML stackups, and KiCAD board templates.
 
 https://github.com/gsuberland/jlcpcb_altium_stackups
 Written by Graham Sutherland - https://chaos.social/@gsuberland
@@ -49,8 +50,10 @@ const string OutputPath = @"N:\JLCStackups\";
 const string RawJsonSubdir = @"raw_json";
 // subdirectory for the normalised JSON (after processing into layer data)
 const string NormalisedJsonSubdir = @"normalised_json";
-// subdirectory for the stackup files
-const string StackupSubdir = @"altium_stackups";
+// subdirectory for Altium stackup files
+const string AltiumStackupSubdir = @"altium_stackups";
+// subdirectory for KiCAD stackup files
+const string KicadStackupSubdir = @"kicad_stackups";
 // target URL for the stackup service endpoint
 const string StackupUrl = @"https://cart.jlcpcb.com/api/overseas-shop-cart/v1/shoppingCart/getImpedanceTemplateSettings";
 // max requests per minute
@@ -73,13 +76,19 @@ async Task Main()
 	{
 		Directory.CreateDirectory(NormalisedJsonSubdirPath);
 	}
-	string StackupSubdirPath = Path.Combine(OutputPath, StackupSubdir);
-	if (!Directory.Exists(StackupSubdirPath))
+	string AltiumStackupSubdirPath = Path.Combine(OutputPath, AltiumStackupSubdir);
+	if (!Directory.Exists(AltiumStackupSubdirPath))
 	{
-		Directory.CreateDirectory(StackupSubdirPath);
+		Directory.CreateDirectory(AltiumStackupSubdirPath);
 	}
-	
+	string KicadStackupSubdirPath = Path.Combine(OutputPath, KicadStackupSubdir);
+	if (!Directory.Exists(KicadStackupSubdirPath))
+	{
+		Directory.CreateDirectory(KicadStackupSubdirPath);
+	}
+
 	var jsoIndent = new JsonSerializerOptions { WriteIndented = true };
+	var utf8noBOM = new UTF8Encoding(false);
 	
 	var stopwatch = new Stopwatch();
 	stopwatch.Start();
@@ -113,7 +122,7 @@ async Task Main()
 						string fileNameFormat = $"jlcpcb_{template.LayerCount}L_{template.BoardThickness}mm_outer{outerWeight}oz_inner{innerWeight}oz_{stackupName}";
 						var rawJsonOutputPath = Path.Combine(RawJsonSubdirPath, fileNameFormat + ".json");
 						var rawJsonStr = JsonSerializer.Serialize<JLCStackupTemplate>(template, jsoIndent);
-						await File.WriteAllTextAsync(rawJsonOutputPath, rawJsonStr, Encoding.UTF8);
+						await File.WriteAllTextAsync(rawJsonOutputPath, rawJsonStr, utf8noBOM);
 						
 						var stackupData = TranslateStackupData(template);
 						if (stackupData == null)
@@ -124,12 +133,18 @@ async Task Main()
 						var normalisedJsonOutputPath = Path.Combine(NormalisedJsonSubdirPath, fileNameFormat + ".json");
 						
 						var normalisedJsonStr = JsonSerializer.Serialize<List<BaseLayerData>>(stackupData, jsoIndent);
-						await File.WriteAllTextAsync(normalisedJsonOutputPath, normalisedJsonStr, Encoding.UTF8);
+						await File.WriteAllTextAsync(normalisedJsonOutputPath, normalisedJsonStr, utf8noBOM);
 
-						var stackupXml = BuildAltiumStackup(stackupData, template);
-						
-						var xmlOutputPath = Path.Combine(StackupSubdirPath, fileNameFormat + ".stackupx");
-						await File.WriteAllTextAsync(xmlOutputPath, stackupXml, Encoding.UTF8);
+						var altiumXmlStackup = BuildAltiumStackup(stackupData, template);
+						var altiumXmlOutputPath = Path.Combine(AltiumStackupSubdirPath, fileNameFormat + ".stackupx");
+						await File.WriteAllTextAsync(altiumXmlOutputPath, altiumXmlStackup, utf8noBOM);
+
+						var kicadBoardTemplate = BuildKicadStackup(stackupData, template);
+						var kicadBoardOutputPath = Path.Combine(KicadStackupSubdirPath, fileNameFormat + ".kicad_pcb");
+						await File.WriteAllTextAsync(kicadBoardOutputPath, kicadBoardTemplate, utf8noBOM);
+						var kicadProject = GetKicadProjectFile(fileNameFormat + ".kicad_pro");
+						var kicadProjectOutputPath = Path.Combine(KicadStackupSubdirPath, fileNameFormat + ".kicad_pro");
+						await File.WriteAllTextAsync(kicadProjectOutputPath, kicadProject, utf8noBOM);
 					}
 					stopwatch.Restart();
 				}
@@ -162,7 +177,14 @@ List<BaseLayerData>? TranslateStackupData(JLCStackupTemplate template)
 			}
 			copperLayerNumber++;
 
-			var thickness = lineData.Thickness;
+			var thicknessStr = lineData.Thickness;
+			if (thicknessStr == "" && template.TemplateName == "JLC061611-1080B")
+			{
+				Console.WriteLine($"Fixup: JLC061611-1080B has blank copper thickness, replacing with 0.03mm");
+				thicknessStr = "0.03mm";
+			}
+			var thickness = ParseThickness(thicknessStr) ?? throw new InvalidDataException($"Could not parse thickness value \"{thicknessStr}\".");
+
 			var weight = (copperLayerNumber == 1 || copperLayerNumber == template.LayerCount) ? template.OuterCopperWeight : template.InnerCopperWeight;
 			
 			var copperLayer = new CopperLayerData
@@ -190,7 +212,6 @@ List<BaseLayerData>? TranslateStackupData(JLCStackupTemplate template)
 			{
 				Console.WriteLine($"Fixup: JLC16161H-2313 has blank prepreg thickness, replacing with 0.0888mm");
 				thicknessStr = "0.0888mm";
-
 			}
 			var thickness = ParseThickness(thicknessStr) ?? throw new InvalidDataException($"Could not parse thickness value \"{thicknessStr}\".");
 			
@@ -257,7 +278,9 @@ List<BaseLayerData>? TranslateStackupData(JLCStackupTemplate template)
 					
 					copperLayerNumber++;
 
-					var thickness = coreEntry.Thickness;
+					var thicknessStr = coreEntry.Thickness;
+					var thickness = ParseThickness(thicknessStr) ?? throw new InvalidDataException($"Could not parse thickness value \"{thicknessStr}\".");
+
 					var weight = template.InnerCopperWeight; // are cores *always* internal?
 					
 					var copperLayer = new CopperLayerData
@@ -294,78 +317,6 @@ List<BaseLayerData>? TranslateStackupData(JLCStackupTemplate template)
 	return layers;
 }
 
-string BuildAltiumStackup(List<BaseLayerData> layers, JLCStackupTemplate template)
-{
-	var layersXml = new List<string>();
-	int copperLayerNumber = 0;
-	int dielectricLayerNumber = 0;
-	string topCopperLayerGuid = "";
-	string bottomCopperLayerGuid = "";
-	foreach (var layer in layers)
-	{
-		if (layer is CopperLayerData)
-		{
-			var copperLayer = (CopperLayerData)layer;
-			copperLayerNumber++;
-			
-			string layerGuid = Guid.NewGuid().ToString();
-			if (copperLayerNumber == 1)
-			{
-				topCopperLayerGuid = layerGuid;
-			}
-			else if (copperLayerNumber == template.LayerCount)
-			{
-				bottomCopperLayerGuid = layerGuid;
-			}
-
-			var layerName = MapCopperLayerNumberToName(copperLayerNumber, template.LayerCount);
-			PartPlacement placement;
-			if (copperLayerNumber == 1)
-				placement = PartPlacement.Up;
-			else if (copperLayerNumber == template.LayerCount)
-				placement = PartPlacement.Down;
-			else
-				placement = PartPlacement.None;
-
-			var layerXml = GetStackupXmlCopperLayer(layerName, layerGuid, copperLayer.Weight, copperLayer.Thickness, placement);
-			layersXml.Add(layerXml);
-		}
-		else if (layer is DielectricLayerData)
-		{
-			var dielectricLayer = (DielectricLayerData)layer;
-			dielectricLayerNumber++;
-
-			string layerGuid = Guid.NewGuid().ToString();
-
-			var layerName = $"Dielectric {dielectricLayerNumber}";
-
-			var layerXml = GetStackupXmlDielectricLayer(
-				layerName,
-				layerGuid, 
-				dielectricLayer.Material.Manufacturer,
-				dielectricLayer.Material.Model,
-				dielectricLayer.Material.Construction, 
-				dielectricLayer.Material.ResinContent, 
-				dielectricLayer.Material.DielectricConstant, 
-				dielectricLayer.Material.LossTangent, 
-				dielectricLayer.Material.GlassTransitionTemperature, 
-				dielectricLayer.Thickness, 
-				dielectricLayer.Material.IsCore
-			);
-			layersXml.Add(layerXml);
-		}
-	}
-	
-	var layerStackGuid = Guid.NewGuid().ToString();
-	var prefix = GetStackupXmlPrefix(layerStackGuid);
-	var suffix = GetStackupXmlSuffix(template.LayerCount, topCopperLayerGuid, bottomCopperLayerGuid, layerStackGuid);
-	
-	layersXml.Insert(0, prefix);
-	layersXml.Add(suffix);
-	
-	return string.Join("", layersXml);
-}
-
 // regex to match thickness values. almost all values are suffixed with "mm" but we have to accept ones without because some (e.g. JLC06161H-1080B) have no suffix
 readonly Regex ThicknessRegex = new Regex(@"^(?<thickness>\d+(?:\.\d+))\s*(?:mm)?$");
 
@@ -384,7 +335,310 @@ double? ParseThickness(string? thickness)
 	return double.TryParse(match.Groups["thickness"].ValueSpan, out result) ? result : null;
 }
 
-string MapCopperLayerNumberToName(long layerNumber, long layerCount)
+string BuildKicadStackup(List<BaseLayerData> layers, JLCStackupTemplate template)
+{
+	var pieces = new List<string>();
+	int copperLayerNumber = 0;
+	int dielectricLayerNumber = 0;
+	string topCopperLayerGuid = "";
+	string bottomCopperLayerGuid = "";
+	foreach (var layer in layers)
+	{
+		if (layer is CopperLayerData)
+		{
+			var copperLayer = (CopperLayerData)layer;
+			copperLayerNumber++;
+
+			var layerName = MapCopperLayerNumberToKicadLayerName(copperLayerNumber, template.LayerCount);
+			var layerPiece = GetKicadBoardStackupCopperLayer(layerName, copperLayer.Thickness);
+			pieces.Add(layerPiece);
+		}
+		else if (layer is DielectricLayerData)
+		{
+			var dielectricLayer = (DielectricLayerData)layer;
+			dielectricLayerNumber++;
+
+
+			var layerName = $"dielectric {dielectricLayerNumber}";
+			var layerPiece = GetKicadBoardStackupDielectricLayer(
+				layerName, 
+				dielectricLayer.Thickness,
+				dielectricLayer.Material.IsCore,
+				$"{dielectricLayer.Material.Manufacturer} {dielectricLayer.Material.Model}",
+				dielectricLayer.Material.Construction,
+				dielectricLayer.Material.DielectricConstant,
+				dielectricLayer.Material.LossTangent
+			);
+			
+			pieces.Add(layerPiece);
+		}
+	}
+
+	var prefix = GetKicadBoardPrefix(template.BoardThickness, template.LayerCount - 2);
+	var suffix = GetKicadBoardSuffix();
+
+	pieces.Insert(0, prefix);
+	pieces.Add(suffix);
+
+	return string.Join("", pieces);
+}
+
+string MapCopperLayerNumberToKicadLayerName(long layerNumber, long layerCount)
+{
+	if (layerNumber == 1)
+		return "F.Cu";
+	if (layerNumber == layerCount)
+		return "B.Cu";
+
+	return $"In{layerNumber - 1}.Cu";
+}
+
+string GetKicadProjectFile(string projectFileName)
+{
+	string template = @"{""board"":{""3dviewports"":[],""design_settings"":{""defaults"":{},""diff_pair_dimensions"":[],""drc_exclusions"":[],""meta"":{""version"":2},""rule_severities"":{},""rules"":{},""teardrop_options"":[{}],""teardrop_parameters"":[],""track_widths"":[],""tuning_pattern_settings"":{},""via_dimensions"":[]},""ipc2581"":{""dist"":"""",""distpn"":"""",""internal_id"":"""",""mfg"":"""",""mpn"":""""},""layer_presets"":[],""viewports"":[]},""boards"":[],""cvpcb"":{""equivalence_files"":[]},""libraries"":{""pinned_footprint_libs"":[],""pinned_symbol_libs"":[]},""meta"":{""filename"":""$FILE_NAME$"",""version"":1},""net_settings"":{""classes"":[],""meta"":{""version"":3},""net_colors"":null,""netclass_assignments"":null,""netclass_patterns"":[]},""pcbnew"":{""last_paths"":{""gencad"":"""",""idf"":"""",""netlist"":"""",""plot"":"""",""pos_files"":"""",""specctra_dsn"":"""",""step"":"""",""svg"":"""",""vrml"":""""},""page_layout_descr_file"":""""},""schematic"":{""legacy_lib_dir"":"""",""legacy_lib_list"":[]},""sheets"":[],""text_variables"":{}}";
+	return template.Replace("$FILE_NAME$", projectFileName.Replace("\"", "\\\""));
+}
+
+string GetKicadBoardPrefix(double thickness, long internalLayerCount)
+{
+	// todo: thickness will be wrong (nominal vs. sum of layers) so check if this is ok
+	string layerTemplate = "\t\t($NUM$ \"In$NUM$.Cu\" signal)";
+	string template = @"(kicad_pcb
+	(version 20240108)
+	(generator ""pcbnew"")
+	(generator_version ""8.0"")
+	(general
+		(thickness $THICKNESS$)
+		(legacy_teardrops no)
+	)
+	(paper ""A4"")
+	(layers
+		(0 ""F.Cu"" signal)
+$INNER_LAYERS$
+		(31 ""B.Cu"" signal)
+		(32 ""B.Adhes"" user ""B.Adhesive"")
+		(33 ""F.Adhes"" user ""F.Adhesive"")
+		(34 ""B.Paste"" user)
+		(35 ""F.Paste"" user)
+		(36 ""B.SilkS"" user ""B.Silkscreen"")
+		(37 ""F.SilkS"" user ""F.Silkscreen"")
+		(38 ""B.Mask"" user)
+		(39 ""F.Mask"" user)
+		(40 ""Dwgs.User"" user ""User.Drawings"")
+		(41 ""Cmts.User"" user ""User.Comments"")
+		(42 ""Eco1.User"" user ""User.Eco1"")
+		(43 ""Eco2.User"" user ""User.Eco2"")
+		(44 ""Edge.Cuts"" user)
+		(45 ""Margin"" user)
+		(46 ""B.CrtYd"" user ""B.Courtyard"")
+		(47 ""F.CrtYd"" user ""F.Courtyard"")
+		(48 ""B.Fab"" user)
+		(49 ""F.Fab"" user)
+		(50 ""User.1"" user)
+		(51 ""User.2"" user)
+		(52 ""User.3"" user)
+		(53 ""User.4"" user)
+		(54 ""User.5"" user)
+		(55 ""User.6"" user)
+		(56 ""User.7"" user)
+		(57 ""User.8"" user)
+		(58 ""User.9"" user)
+	)
+	(setup
+		(stackup
+			(layer ""F.SilkS""
+				(type ""Top Silk Screen"")
+			)
+			(layer ""F.Paste""
+				(type ""Top Solder Paste"")
+			)
+			(layer ""F.Mask""
+				(type ""Top Solder Mask"")
+				(thickness 0.01524)
+				(material ""JLCPCB Soldermask"")
+				(epsilon_r 3.8)
+				(loss_tangent 0)
+			)
+";
+	var layerDefs = new StringBuilder();
+	for (int i = 1; i <= internalLayerCount; i++)
+	{
+		layerDefs.AppendLine(layerTemplate.Replace("$NUM$", i.ToString()));
+	}
+	return template
+		.Replace("$THICKNESS$", thickness.ToString())
+		.Replace("$INNER_LAYERS$", layerDefs.ToString().TrimEnd('\r', '\n'));
+}
+
+string GetKicadBoardStackupCopperLayer(string layerName, double thickness)
+{
+	string template = @"			(layer ""$LAYER_NAME$""
+				(type ""copper"")
+				(thickness $THICKNESS$)
+			)
+";
+	return template
+		.Replace("$LAYER_NAME$", layerName)
+		.Replace("$THICKNESS$", thickness.ToString());
+}
+
+string GetKicadBoardStackupDielectricLayer(string layerName, double thickness, bool isCore, string material, string construction, double dK, double dF)
+{
+	string template = @"			(layer ""$LAYER_NAME$""
+				(type ""$TYPE$"")
+				(color ""FR4 natural"")
+				(thickness $THICKNESS$)
+				(material ""$MATERIAL$ $CONSTRUCTION$"")
+				(epsilon_r $DIELECTRIC_CONSTANT$)
+				(loss_tangent $LOSS_TANGENT$)
+			)
+";
+	return template
+		.Replace("$TYPE$", isCore ? "core" : "prepreg")
+		.Replace("$LAYER_NAME$", layerName)
+		.Replace("$THICKNESS$", thickness.ToString())
+		.Replace("$MATERIAL$", material.Replace("\"", "\\\""))
+		.Replace("$CONSTRUCTION$", construction.Replace("\"", "\\\""))
+		.Replace("$DIELECTRIC_CONSTANT$", dK.ToString())
+		.Replace("$LOSS_TANGENT$", dF.ToString());
+}
+
+string GetKicadBoardSuffix()
+{
+	string template = @"			(layer ""B.Mask""
+				(type ""Bottom Solder Mask"")
+				(thickness 0.01524)
+				(material ""JLCPCB Soldermask"")
+				(epsilon_r 3.8)
+				(loss_tangent 0)
+			)
+			(layer ""B.Paste""
+				(type ""Bottom Solder Paste"")
+			)
+			(layer ""B.SilkS""
+				(type ""Bottom Silk Screen"")
+			)
+			(copper_finish ""None"")
+			(dielectric_constraints yes)
+		)
+		(pad_to_mask_clearance 0)
+		(allow_soldermask_bridges_in_footprints no)
+		(pcbplotparams
+			(layerselection 0x00010fc_ffffffff)
+			(plot_on_all_layers_selection 0x0000000_00000000)
+			(disableapertmacros no)
+			(usegerberextensions no)
+			(usegerberattributes yes)
+			(usegerberadvancedattributes yes)
+			(creategerberjobfile yes)
+			(dashed_line_dash_ratio 12.000000)
+			(dashed_line_gap_ratio 3.000000)
+			(svgprecision 4)
+			(plotframeref no)
+			(viasonmask no)
+			(mode 1)
+			(useauxorigin no)
+			(hpglpennumber 1)
+			(hpglpenspeed 20)
+			(hpglpendiameter 15.000000)
+			(pdf_front_fp_property_popups yes)
+			(pdf_back_fp_property_popups yes)
+			(dxfpolygonmode yes)
+			(dxfimperialunits yes)
+			(dxfusepcbnewfont yes)
+			(psnegative no)
+			(psa4output no)
+			(plotreference yes)
+			(plotvalue yes)
+			(plotfptext yes)
+			(plotinvisibletext no)
+			(sketchpadsonfab no)
+			(subtractmaskfromsilk no)
+			(outputformat 1)
+			(mirror no)
+			(drillshape 1)
+			(scaleselection 1)
+			(outputdirectory """")
+		)
+	)
+	(net 0 """")
+)";
+	return template;
+}
+
+string BuildAltiumStackup(List<BaseLayerData> layers, JLCStackupTemplate template)
+{
+	var layersXml = new List<string>();
+	int copperLayerNumber = 0;
+	int dielectricLayerNumber = 0;
+	string topCopperLayerGuid = "";
+	string bottomCopperLayerGuid = "";
+	foreach (var layer in layers)
+	{
+		if (layer is CopperLayerData)
+		{
+			var copperLayer = (CopperLayerData)layer;
+			copperLayerNumber++;
+
+			string layerGuid = Guid.NewGuid().ToString();
+			if (copperLayerNumber == 1)
+			{
+				topCopperLayerGuid = layerGuid;
+			}
+			else if (copperLayerNumber == template.LayerCount)
+			{
+				bottomCopperLayerGuid = layerGuid;
+			}
+
+			var layerName = MapCopperLayerNumberToAltiumLayerName(copperLayerNumber, template.LayerCount);
+			PartPlacement placement;
+			if (copperLayerNumber == 1)
+				placement = PartPlacement.Up;
+			else if (copperLayerNumber == template.LayerCount)
+				placement = PartPlacement.Down;
+			else
+				placement = PartPlacement.None;
+
+			var layerXml = GetAltiumStackupXmlCopperLayer(layerName, layerGuid, copperLayer.Weight, copperLayer.Thickness, placement);
+			layersXml.Add(layerXml);
+		}
+		else if (layer is DielectricLayerData)
+		{
+			var dielectricLayer = (DielectricLayerData)layer;
+			dielectricLayerNumber++;
+
+			string layerGuid = Guid.NewGuid().ToString();
+
+			var layerName = $"Dielectric {dielectricLayerNumber}";
+
+			var layerXml = GetAltiumStackupXmlDielectricLayer(
+				layerName,
+				layerGuid,
+				dielectricLayer.Material.Manufacturer,
+				dielectricLayer.Material.Model,
+				dielectricLayer.Material.Construction,
+				dielectricLayer.Material.ResinContent,
+				dielectricLayer.Material.DielectricConstant,
+				dielectricLayer.Material.LossTangent,
+				dielectricLayer.Material.GlassTransitionTemperature,
+				dielectricLayer.Thickness,
+				dielectricLayer.Material.IsCore
+			);
+			layersXml.Add(layerXml);
+		}
+	}
+
+	var layerStackGuid = Guid.NewGuid().ToString();
+	var prefix = GetAltiumStackupXmlPrefix(layerStackGuid);
+	var suffix = GetAltiumStackupXmlSuffix(template.LayerCount, topCopperLayerGuid, bottomCopperLayerGuid, layerStackGuid);
+
+	layersXml.Insert(0, prefix);
+	layersXml.Add(suffix);
+
+	return string.Join("", layersXml);
+}
+
+string MapCopperLayerNumberToAltiumLayerName(long layerNumber, long layerCount)
 {
 	if (layerNumber == 1)
 		return "Top Layer";
@@ -394,7 +648,7 @@ string MapCopperLayerNumberToName(long layerNumber, long layerCount)
 	return $"Inner Layer {layerNumber - 1}";
 }
 
-string GetStackupXmlDielectricLayer(string layerName, string layerGuid, string manufacturer, string product, string construction, double resinContent, double dielectricConstant, double lossTangent, int glassTransition, double thickness, bool isCore)
+string GetAltiumStackupXmlDielectricLayer(string layerName, string layerGuid, string manufacturer, string product, string construction, double resinContent, double dielectricConstant, double lossTangent, int glassTransition, double thickness, bool isCore)
 {
 	string prepregGuid = @"1a79611a-039d-4d40-a204-53c26c50f8b5";
 	string coreGuid = @"136c62ef-1fa6-4897-ae71-7e797b632b92";
@@ -430,7 +684,7 @@ string GetStackupXmlDielectricLayer(string layerName, string layerGuid, string m
 		.Replace("$THICKNESS$", $"{thickness}mm");
 }
 
-string GetStackupXmlCopperLayer(string layerName, string layerGuid, double weight, string thickness, PartPlacement partPlacement)
+string GetAltiumStackupXmlCopperLayer(string layerName, string layerGuid, double weight, double thickness, PartPlacement partPlacement)
 {
 	const string template = @"
           <Layer Id=""$LAYER_GUID$"" TypeId=""f4eccd87-2cfb-4f37-be50-4f3a272b4d01"" Name=""$LAYER_NAME$"" IsShared=""True"">
@@ -458,11 +712,11 @@ string GetStackupXmlCopperLayer(string layerName, string layerGuid, double weigh
 		.Replace("$LAYER_GUID$", layerGuid)
 		.Replace("$LAYER_NAME$", layerName)
 		.Replace("$COPPER_WEIGHT$", $"{weight}oz")
-		.Replace("$THICKNESS$", thickness)
+		.Replace("$THICKNESS$", $"{thickness}mm")
 		.Replace("$PART_PLACEMENT$", placement);
 }
 
-string GetStackupXmlPrefix(string layerStackGuid)
+string GetAltiumStackupXmlPrefix(string layerStackGuid)
 {
 	const string template = @"<StackupDocument SerializerVersion=""1.1.0.0"" Version=""2.1.0.0"" Id=""$DOCUMENT_GUID$"" RevisionId=""$REVISION_GUID$"" RevisionDate=""$REVISION_DATE$"" xmlns=""http://altium.com/ns/LayerStackManager"">
   <FeatureSet>
@@ -502,7 +756,7 @@ string GetStackupXmlPrefix(string layerStackGuid)
 		.Replace("$TOP_SOLDER_LAYER_GUID$", topSolderGuid);
 }
 
-string GetStackupXmlSuffix(long layerCount, string topLayerGuid, string bottomLayerGuid, string layerStackGuid)
+string GetAltiumStackupXmlSuffix(long layerCount, string topLayerGuid, string bottomLayerGuid, string layerStackGuid)
 {
 	const string template = @"
           <Layer Id=""$BOTTOM_SOLDER_GUID$"" TypeId=""7b384237-13d8-4318-8bcb-accd8d9a51e7"" Name=""Bottom Solder"" IsShared=""True"">
@@ -781,7 +1035,7 @@ class CopperLayerData : BaseLayerData
 {
 	public string Type => "Copper";
 	public double Weight { get; set; }
-	public string Thickness { get; set; }
+	public double Thickness { get; set; }
 }
 
 class DielectricLayerData : BaseLayerData
