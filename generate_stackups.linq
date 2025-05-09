@@ -5,6 +5,7 @@
   <Namespace>System.Net.Http</Namespace>
   <Namespace>System.Threading.Tasks</Namespace>
   <Namespace>System.Net.Http.Headers</Namespace>
+  <Namespace>System.Globalization</Namespace>
 </Query>
 
 /*
@@ -59,6 +60,10 @@ const string StackupUrl = @"https://cart.jlcpcb.com/api/overseas-shop-cart/v1/sh
 // max requests per minute
 const double RateLimit = 120;
 
+// culture matters! double.TryParse and such will parse numbers using the user's current culture, which might not use a . for the decimal separator.
+// this naturally leads to problems when you're working with numbers explicitly provided in the en-US/en-GB style.
+readonly CultureInfo ParsingCulture = CultureInfo.CreateSpecificCulture("en-US");
+
 async Task Main()
 {
 	// create output directories if they don't already exist
@@ -100,17 +105,24 @@ async Task Main()
 			{
 				foreach (double innerWeight in GetValidInnerCopperWeights(layerCount))
 				{
+					// don't exceed the fetch rate limit (be nice)
 					while (stopwatch.ElapsedMilliseconds < (60000.0 / RateLimit))
 					{
 						Thread.Sleep(100);
 					}
+					// grab this stackup
 					Console.WriteLine($"Fetching {layerCount}L {boardThickness}mm {outerWeight}oz/{innerWeight}oz");
 					var stackupResponse = await FetchStackups(layerCount, outerWeight, innerWeight, boardThickness);
 					if (stackupResponse?.Templates == null)
 					{
-						Console.WriteLine("Failed.");
+						Console.WriteLine("Failed (this stackup probably doesn't exist)");
 						continue;
 					}
+					else
+					{
+						Console.WriteLine("Fetched OK!");
+					}
+					// parse the templates we got back
 					foreach (JLCStackupTemplate template in stackupResponse.Templates)
 					{
 						if (!template.Enabled)
@@ -118,12 +130,14 @@ async Task Main()
 							Console.WriteLine($"Warning: template {template.TemplateName} is marked as disabled; skipping.");
 							continue;
 						}
+						// save the raw JSON out
 						var stackupName = template.Default ? "NOREQ" : template.TemplateName;
 						string fileNameFormat = $"jlcpcb_{template.LayerCount}L_{template.BoardThickness}mm_outer{outerWeight}oz_inner{innerWeight}oz_{stackupName}";
 						var rawJsonOutputPath = Path.Combine(RawJsonSubdirPath, fileNameFormat + ".json");
 						var rawJsonStr = JsonSerializer.Serialize<JLCStackupTemplate>(template, jsoIndent);
 						await File.WriteAllTextAsync(rawJsonOutputPath, rawJsonStr, utf8noBOM);
 						
+						// translate the JLC stackup data to normalised BaseLayerData objects and save those out as JSON
 						var stackupData = TranslateStackupData(template);
 						if (stackupData == null)
 						{
@@ -134,11 +148,13 @@ async Task Main()
 						
 						var normalisedJsonStr = JsonSerializer.Serialize<List<BaseLayerData>>(stackupData, jsoIndent);
 						await File.WriteAllTextAsync(normalisedJsonOutputPath, normalisedJsonStr, utf8noBOM);
-
+						
+						// turn the normalised stackup data into an Altium stackup file
 						var altiumXmlStackup = BuildAltiumStackup(stackupData, template);
 						var altiumXmlOutputPath = Path.Combine(AltiumStackupSubdirPath, fileNameFormat + ".stackupx");
 						await File.WriteAllTextAsync(altiumXmlOutputPath, altiumXmlStackup, utf8noBOM);
-
+						
+						// turn the normalised stackup data into a KiCAD stackup template
 						var kicadBoardTemplate = BuildKicadStackup(stackupData, template);
 						var kicadBoardOutputPath = Path.Combine(KicadStackupSubdirPath, fileNameFormat + ".kicad_pcb");
 						await File.WriteAllTextAsync(kicadBoardOutputPath, kicadBoardTemplate, utf8noBOM);
@@ -220,6 +236,7 @@ public static class Extensions
 
 List<BaseLayerData>? TranslateStackupData(JLCStackupTemplate template)
 {
+	// if this stackup doesn't have any laminations we can't translate it (laminations are the layers)
 	if ((template.Laminations?.Length ?? 0) == 0)
 	{
 		return null;
@@ -243,6 +260,7 @@ List<BaseLayerData>? TranslateStackupData(JLCStackupTemplate template)
 			copperLayerNumber++;
 
 			var thicknessStr = lineData.Thickness;
+			// there's a mistake on the JLC061611-1080B data where they just have a blank size for the copper thickness
 			if (thicknessStr == "" && template.TemplateName == "JLC061611-1080B")
 			{
 				Console.WriteLine($"Fixup: JLC061611-1080B has blank copper thickness, replacing with 0.03mm");
@@ -273,6 +291,7 @@ List<BaseLayerData>? TranslateStackupData(JLCStackupTemplate template)
 			dielectricLayerNumber++;
 
 			var thicknessStr = prepregData.Thickness;
+			// there's a mistake in the JLC16161H-2313 data where they just have a blank size for the prepreg thickness
 			if (thicknessStr == "" && template.TemplateName == "JLC16161H-2313")
 			{
 				Console.WriteLine($"Fixup: JLC16161H-2313 has blank prepreg thickness, replacing with 0.0888mm");
@@ -298,7 +317,7 @@ List<BaseLayerData>? TranslateStackupData(JLCStackupTemplate template)
 					Console.WriteLine($"Fixup: replacing material count '!' with material count '1'");
 					materialCountStr = "1";
 				}
-				if (materialParts?.Length > 2 || (materialCountStr != null && !int.TryParse(materialCountStr, out materialCount)))
+				if (materialParts?.Length > 2 || (materialCountStr != null && !int.TryParse(materialCountStr, ParsingCulture, out materialCount)))
 				{
 					throw new InvalidDataException($"Lamination {laminationIndex} has unrecognised material spec \"{prepregData.MaterialType}\"");
 				}
@@ -344,6 +363,7 @@ List<BaseLayerData>? TranslateStackupData(JLCStackupTemplate template)
 					copperLayerNumber++;
 
 					var thicknessStr = coreEntry.Thickness;
+					// there's a mistake in the JLC061611-1080B data where they just have a blank size for the copper thickness
 					if (thicknessStr == "" && template.TemplateName == "JLC061611-1080B")
 					{
 						Console.WriteLine($"Fixup: JLC061611-1080B has blank copper thickness, replacing with 0.03mm");
@@ -402,7 +422,8 @@ double? ParseThickness(string? thickness)
 		return null;
 	}
 	double result;
-	return double.TryParse(match.Groups["thickness"].ValueSpan, out result) ? result : null;
+	// very important to include the ParsingCulture here, otherwise users with different number formats (e.g. 123,45) will 
+	return double.TryParse(match.Groups["thickness"].ValueSpan, ParsingCulture, out result) ? result : null;
 }
 
 string BuildKicadStackup(List<BaseLayerData> layers, JLCStackupTemplate template)
