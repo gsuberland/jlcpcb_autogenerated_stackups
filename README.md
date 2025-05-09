@@ -2,7 +2,7 @@
 
 This repository contains auto-generated stackup files for JLCPCB's multi-layer PCBs, plus the LinqPad (C#) script that was used to generate them. It also contains the raw API JSON responses from JLC's website, and a normalised JSON format that you can use to generate your own stackups for other EDA tools without needing to touch my code.
 
-Stackups are generated for all supported board thicknesses, outer copper weights, inner copper weights, and stackup variations, for layer counts from 4 to 32. As of 2024-11-09 this produces 313 separate stackup files.
+Stackups are generated for all supported board thicknesses, outer copper weights, inner copper weights, and stackup variations, for layer counts from 4 to 32. As of 2025-05-09 this produces 562 separate stackup files.
 
 ## Warning
 
